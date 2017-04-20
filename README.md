@@ -1,4 +1,4 @@
-Falcon
+Falcon + minialign
 ===========
 
 Falcon: a set of tools for fast aligning long reads for consensus and assembly
