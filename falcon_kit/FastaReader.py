@@ -95,6 +95,9 @@ def getFileHandle(filenameOrFile, mode="r"):
     else:
         raise Exception("Invalid type to getFileHandle")
 
+def wrap(s, columns):
+    return "\n".join(s[start:start+columns]
+                     for start in xrange(0, len(s), columns))
 
 class ReaderBase(object):
     def __init__(self, f):
@@ -258,3 +261,59 @@ class FastaReader(ReaderBase):
                 yield FastaRecord.fromString(">" + part)
         except AssertionError:
             raise ValueError("Invalid FASTA file {!r}".format(self.filename))
+
+class WriterBase(object):
+    def __init__(self, f):
+        """
+        Prepare for output to the file
+        """
+        self.file = getFileHandle(f, "w")
+        if hasattr(self.file, "name"):
+            self.filename = self.file.name
+        else:
+            self.filename = "(anonymous)"
+
+    def close(self):
+        """
+        Close the underlying file
+        """
+        self.file.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self.close()
+
+    def __repr__(self):
+        return "<%s for %s>" % (type(self).__name__, self.filename)
+
+class FastaWriter(WriterBase):
+    """
+    A FASTA file writer class
+    Example:
+    .. doctest::
+        >>> from pbcore.io import FastaWriter
+        >>> with FastaWriter("output.fasta.gz") as writer:
+        ...     writer.writeRecord("dog", "GATTACA")
+        ...     writer.writeRecord("cat", "CATTACA")
+    (Notice that underlying file will be automatically closed after
+    exit from the `with` block.)
+    .. testcleanup::
+        import os; os.unlink("output.fasta.gz")
+    """
+    def writeRecord(self, *args):
+        """
+        Write a FASTA record to the file.  If given one argument, it is
+        interpreted as a ``FastaRecord``.  Given two arguments, they
+        are interpreted as the name and the sequence.
+        """
+        if len(args) not in (1, 2):
+            raise ValueError
+        if len(args) == 1:
+            record = args[0]
+        else:
+            header, sequence = args
+            record = FastaRecord(header, str(sequence))
+        self.file.write(str(record))
+        self.file.write("\n")

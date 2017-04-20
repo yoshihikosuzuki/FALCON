@@ -165,6 +165,7 @@ def get_dict_from_old_falcon_cfg(config):
     cns_concurrent_jobs = default_concurrent_jobs
     pda_concurrent_jobs = default_concurrent_jobs
     pla_concurrent_jobs = default_concurrent_jobs
+    ma_concurrent_jobs = default_concurrent_jobs
     fc_concurrent_jobs = default_concurrent_jobs
 
     if config.has_option(section, 'pa_concurrent_jobs'):
@@ -185,6 +186,8 @@ def get_dict_from_old_falcon_cfg(config):
         pda_concurrent_jobs = config.getint(section, 'pda_concurrent_jobs')
     if config.has_option(section, 'pla_concurrent_jobs'):
         pla_concurrent_jobs = config.getint(section, 'pla_concurrent_jobs')
+    if config.has_option(section, 'ma_concurrent_jobs'):
+        ma_concurrent_jobs = config.getint(section, 'ma_concurrent_jobs')
     if config.has_option(section, 'fc_concurrent_jobs'):
         fc_concurrent_jobs = config.getint(section, 'fc_concurrent_jobs')
 
@@ -320,6 +323,19 @@ def get_dict_from_old_falcon_cfg(config):
     if config.has_option(section, TEXT_FILE_BUSY):
         bash.BUG_avoid_Text_file_busy = config.getboolean(section, TEXT_FILE_BUSY)
 
+    if config.has_option(section, 'aligner'):
+        aligner = config.get(section, 'aligner')
+        if aligner not in set(["daligner", "minialign"]):
+            msg = """ Aligner %s is not supported. """ % aligner
+            raise Exception(msg)
+    else:
+        logger.info(""" No aligner specified, using minialign as default aligner """)
+        aligner = "minialign"
+        
+    ma_split_num = 1
+    if config.has_option(section, 'ma_split_num'):
+        ma_split_num = config.getint(section, 'ma_split_num')
+
     hgap_config = {#"input_fofn_fn" : input_fofn_fn, # deprecated
                    "input_fofn" : input_fofn_fn,
                    "target" : target,
@@ -333,6 +349,7 @@ def get_dict_from_old_falcon_cfg(config):
                    "cns_concurrent_jobs" : cns_concurrent_jobs,
                    "pda_concurrent_jobs" : pda_concurrent_jobs,
                    "pla_concurrent_jobs" : pla_concurrent_jobs,
+                   "ma_concurrent_jobs" : ma_concurrent_jobs,
                    "fc_concurrent_jobs" : fc_concurrent_jobs,
                    "overlap_filtering_setting": overlap_filtering_setting,
                    "genome_size" : genome_size,
@@ -346,6 +363,7 @@ def get_dict_from_old_falcon_cfg(config):
                    "sge_option_pla": config.get(section, 'sge_option_pla'),
                    "sge_option_fc": config.get(section, 'sge_option_fc'),
                    "sge_option_cns": config.get(section, 'sge_option_cns'),
+                   "sge_option_ma": config.get(section, 'sge_option_ma'),
                    "pa_HPCdaligner_option": pa_HPCdaligner_option,
                    "ovlp_HPCdaligner_option": ovlp_HPCdaligner_option,
                    "pa_DBsplit_option": pa_DBsplit_option,
@@ -363,6 +381,8 @@ def get_dict_from_old_falcon_cfg(config):
                    "use_tmpdir": use_tmpdir,
                    "pwatcher_type": pwatcher_type,
                    "pwatcher_directory": pwatcher_directory,
+                   "aligner": aligner,
+                   "ma_split_num": ma_split_num,
                    TEXT_FILE_BUSY: bash.BUG_avoid_Text_file_busy,
                    }
     provided = dict(config.items(section))
@@ -527,16 +547,27 @@ def run_falcon_asm(config, las_fofn_fn, preads4falcon_fasta_fn, db_file_fn, job_
     script = bash.script_run_falcon_asm(config, las_fofn_fn, preads4falcon_fasta_fn, db_file_fn)
     bash.write_script(script, script_fn, job_done)
 
+def run_ma_falcon_asm(config, preads_ovl_all, preads4falcon_fasta_fn, job_done, script_fn):
+    script = bash.script_run_ma_falcon_asm(config, preads_ovl_all, preads4falcon_fasta_fn)
+    bash.write_script(script, script_fn, job_done)
+
 def run_report_pre_assembly(i_raw_reads_db_fn, i_preads_fofn_fn, genome_length, length_cutoff, o_json_fn, job_done, script_fn):
     script = bash.script_run_report_pre_assembly(i_raw_reads_db_fn, i_preads_fofn_fn, genome_length, length_cutoff, o_json_fn)
     bash.write_script(script, script_fn, job_done)
 
-def run_daligner(daligner_script, db_prefix, config, job_done, script_fn):
-    bash.write_script(daligner_script, script_fn, job_done)
+def run_daligner(script, db_prefix, config, job_done, script_fn):
+    bash.write_script(script, script_fn, job_done)
+
+def run_minialign(script, config, job_done, script_fn):
+    bash.write_script(script, script_fn, job_done)
 
 def run_las_merge(script, job_done, config, script_fn):
     bash.write_script(script, script_fn, job_done)
 
 def run_consensus(db_fn, las_fn, out_file_fn, config, job_done, script_fn):
     script = bash.script_run_consensus(config, db_fn, las_fn, os.path.basename(out_file_fn))
+    bash.write_script(script, script_fn, job_done)
+
+def run_ma_consensus(fa_all, fa_block, out_file_fn, config, job_done, script_fn):          
+    script = bash.script_run_ma_consensus(config, fa_all, fa_block, os.path.basename(out_file_fn))
     bash.write_script(script, script_fn, job_done)

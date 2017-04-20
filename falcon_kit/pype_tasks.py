@@ -1,6 +1,7 @@
 # PypeTask functions now need to be module-level.
 from . import run_support as support
 from . import bash # for scattering
+from .FastaReader import FastaReader, FastaWriter
 #from pypeflow.simple_pwatcher_bridge import fn # not really needed
 import collections
 import json
@@ -106,24 +107,28 @@ def task_run_db2falcon(self):
 
 def task_run_falcon_asm(self):
     wd = self.parameters['wd']
-    #self.db2falcon_done
-    db_file = fn(self.db_file)
-    job_done = fn(self.falcon_asm_done)
     config = self.parameters['config']
-    pread_dir = self.parameters['pread_dir']
+    aligner = config['aligner']
+    #self.db2falcon_done
+    job_done = fn(self.falcon_asm_done)
+    #pread_dir = self.parameters['pread_dir']
     preads4falcon_fn = fn(self.preads4falcon)
-    las_fofn_fn = fn(self.las_fofn)
     script_dir = os.path.join(wd)
     script_fn =  os.path.join(script_dir ,'run_falcon_asm.sh')
     args = {
-        'las_fofn_fn': las_fofn_fn,
         'preads4falcon_fasta_fn': preads4falcon_fn,
-        'db_file_fn': db_file,
         'config': config,
         'job_done': job_done,
         'script_fn': script_fn,
     }
-    support.run_falcon_asm(**args)
+    if aligner == 'daligner':
+        args['db_file_fn'] = self.db_file
+        args['las_fofn_fn'] = self.las_fofn
+        support.run_falcon_asm(**args)
+    else:
+        args['preads_ovl_all'] = self.preads_ovl
+        support.run_ma_falcon_asm(**args)
+        
     self.generated_script_fn = script_fn
 
 def task_report_pre_assembly(self):
@@ -153,23 +158,26 @@ def task_report_pre_assembly(self):
     support.run_report_pre_assembly(**kwds)
     self.generated_script_fn = script_fn
 
-def task_run_daligner(self):
-    job_done = fn(self.job_done)
-    daligner_script = self.parameters['daligner_script']
+def task_run_aligner(self):
+    config = self.parameters['config']
+    aligner = config['aligner']
+    script = self.parameters['script']
     job_uid = self.parameters['job_uid']
     cwd = self.parameters['cwd']
-    db_prefix = self.parameters['db_prefix']
-    config = self.parameters['config']
     script_dir = os.path.join(cwd)
     script_fn = os.path.join(script_dir , 'rj_%s.sh' % (job_uid))
     args = {
-        'daligner_script': daligner_script,
-        'db_prefix': db_prefix,
+        'script': script,
         'config': config,
-        'job_done': job_done,
         'script_fn': script_fn,
     }
-    support.run_daligner(**args)
+    if aligner == 'daligner':
+        args['db_prefix'] = self.parameters['db_prefix']
+        args['job_done'] = self.job_done
+        support.run_daligner(**args)
+    else:
+        args['job_done'] = 'out.done'
+        support.run_minialign(**args)
     self.generated_script_fn = script_fn
 
 def read_gathered_las(path):
@@ -220,28 +228,32 @@ def task_run_las_merge(self):
     self.generated_script_fn = script_fn
 
 def task_run_consensus(self):
-    las_fn = fn(self.las)
-    db_fn = fn(self.db)
+    config = self.parameters['config']
+    aligner = config['aligner']
     out_file_fn = fn(self.out_file)
     out_done = 'out.done' #fn(self.out_done)
     job_id = self.parameters['job_id']
     cwd = self.parameters['cwd']
-    config = self.parameters['config']
-    prefix = self.parameters['prefix']
+    #prefix = self.parameters['prefix']
     p_id = int(job_id)
     script_dir = os.path.join(cwd)
     script_fn = os.path.join(script_dir, 'c_%05d.sh' % (p_id))
     #merge_job_dir = os.path.dirname(merged_las_fn)
     #las_fn = os.path.abspath('{merge_job_dir}/{prefix}.{job_id}.las'.format(**locals()))
     args = {
-        'db_fn': db_fn,
-        'las_fn': las_fn,
         'out_file_fn': out_file_fn,
         'config': config,
         'job_done': out_done,
         'script_fn': script_fn,
     }
-    support.run_consensus(**args)
+    if aligner == 'daligner':
+        args['db_fn'] = self.db
+        args['las_fn'] = self.las
+        support.run_consensus(**args)
+    else:
+        args['fa_all'] = self.fa_all
+        args['fa_block'] = self.fa_block
+        support.run_ma_consensus(**args)
     self.generated_script_fn = script_fn
 
 def task_daligner_scatter(self):
@@ -256,11 +268,11 @@ def task_daligner_scatter(self):
     skip_checks = config.get('skip_checks')
     tasks = []
     LOG.info('Skip LAcheck after daligner? {}'.format(skip_checks))
-    func = task_run_daligner
+    func = task_run_aligner
     func_name = '{}.{}'.format(func.__module__, func.__name__)
     for job_uid, script in bash.scripts_daligner(run_jobs_fn, db_prefix, db_build_done, nblock, pread_aln, skip_check=skip_checks):
         job_done_fn = 'job_%s_done' %job_uid
-        parameters =  {'daligner_script': script,
+        parameters =  {'script': script,
                        'job_uid': job_uid,
                        'config': config,
                        'sge_option': config['sge_option_da'],
@@ -277,6 +289,78 @@ def task_daligner_scatter(self):
                 'URL': URL,
         }
         tasks.append(daligner_task)
+    content = json.dumps(tasks, sort_keys=True, indent=4, separators=(',', ': '))
+    open(scatter_fn, 'w').write(content)
+
+def pids_and_split_preads(preads_fofn, preads_fa, split_num, path):   # TODO: need to change as a task?
+    """Make .mai and preads4falcon.fasta, and put separate preads fasta into each directory.
+    """
+
+    #import math
+    #part_num = int(math.ceil(float(get_nread(db_fn)) / split_num))   # TODO: parameterize #split for preads (or a better way than explicit #split...)
+
+    #pid = 0
+    read_counter = 0
+    result = {}
+    writer_all = FastaWriter(preads_fa)
+    with open(preads_fofn, 'r') as f:
+        pid = 1
+        for cns_fn in f:
+            cns_fn = cns_fn.strip()
+            ma_dir = os.path.join(path, "m_%05d" % pid)
+            if not os.path.isdir(ma_dir):
+                os.mkdir(ma_dir)
+            pread_ma_plf = os.path.join(ma_dir, "preads.ma.%d.fasta" % pid)
+            writer = FastaWriter(pread_ma_plf)
+            for r in FastaReader(cns_fn):
+                writer.writeRecord("%08d" % read_counter, r.sequence)
+                writer_all.writeRecord("%08d" % read_counter, r.sequence)
+                read_counter += 1
+            writer.close()
+            result[pid] = pread_ma_plf
+            pid += 1
+
+    writer_all.close()
+        
+    system("minialign -d %s %s" % (os.path.join(path, "preads.ma.mai"), preads_fa))
+
+    return result
+
+def task_minialign_scatter(self):
+    preads_fofn = self.preads_fofn
+    scatter_fn = self.scatter_fn
+    preads_fa = self.preads_fa
+    par = self.parameters
+    config = par['config']
+    tasks = []
+
+    basedir = os.path.dirname(preads_fa)
+    func = task_run_aligner
+    func_name = '{}.{}'.format(func.__module__, func.__name__)
+    for job_uid, pread_ma_plf in pids_and_split_preads(preads_fofn, preads_fa, config['ma_split_num'], basedir).iteritems():
+        ovl_fn = os.path.join(basedir, "m_%05d" % job_uid, "preads.%s.ovl" % job_uid)
+        # TODO: do plf-ize preads.ma.mai
+        script = "minialign -NXA -xava -Oblasr4 -l ../preads.ma.mai %s > %s" % (pread_ma_plf, ovl_fn)   # TODO: suitable parameters for preads?
+        parameters =  {'script': script,
+                       'job_uid': job_uid,
+                       'config': config,
+                       'sge_option': config['sge_option_ma'],
+        }
+        inputs = {'fa_block': os.path.abspath(pread_ma_plf),
+                  'fa_all': os.path.abspath(preads_fa),
+        }
+        outputs = {'ovl_fn': ovl_fn,
+        }
+        python_function = func_name,
+        URL = 'task://localhost/d_%s_%s' %(job_uid, 'pread-ma')
+        minialign_task = {
+                'inputs': inputs,
+                'outputs': outputs,
+                'parameters': parameters,
+                'python_function': python_function,
+                'URL': URL,
+        }
+        tasks.append(minialign_task)
     content = json.dumps(tasks, sort_keys=True, indent=4, separators=(',', ': '))
     open(scatter_fn, 'w').write(content)
 
@@ -316,18 +400,19 @@ def task_merge_scatter(self):
 
     content = json.dumps(tasks, sort_keys=True, indent=4, separators=(',', ': '))
     open(scatter_fn, 'w').write(content)
+    
 def task_consensus_scatter(self):
     scattered_fn = self.scattered
     gathered_fn = self.gathered
     db_fn = self.db
-    wd = os.path.dirname(scattered_fn)
+    #wd = os.path.dirname(scattered_fn)
     par = self.parameters
     db_prefix = par['db_prefix']
     config = par['config']
 
     func = task_run_consensus
     func_name = '{}.{}'.format(func.__module__, func.__name__)
-    basedir = os.path.dirname(wd) # by convention, since we want to preseve some old paths for now
+    #basedir = os.path.dirname(wd) # by convention, since we want to preseve some old paths for now
 
     p_ids_merge_las = read_gathered_las(gathered_fn)
     tasks = []
@@ -358,6 +443,93 @@ def task_consensus_scatter(self):
                 'parameters': parameters,
                 'python_function': python_function,
                 'URL': URL,
+        }
+        tasks.append(task_desc)
+    content = json.dumps(tasks, sort_keys=True, indent=4, separators=(',', ': '))
+    open(scattered_fn, 'w').write(content)
+
+def get_nread(db_file):
+    """Return #reads in a dazzler-db.
+    """
+    import subprocess
+    db_stat = subprocess.check_output("DBstats %s" % db_file, shell = True)
+    for line in db_stat.split('\n'):
+        elems = line.strip().split(' ')
+        if len(elems) > 1 and elems[1] == "reads":
+            return int(elems[0].replace(',', ''))
+        
+def db_to_splitted_fasta(db_fn, split_num, path):
+    """Scatter splitted fasta files originated from raw_read_db into each directory for consensus.
+    """
+    rawread_fa = os.path.join(path, "raw_reads.fasta")
+    system("DBshow -U %s > %s" % (db_fn, rawread_fa))
+    
+    import math
+    part_num = int(math.ceil(float(get_nread(db_fn)) / split_num))
+
+    fa_all = os.path.join(path, "raw_reads.ma.fasta")
+    writer_all = FastaWriter(fa_all)
+
+    pid = 0
+    read_counter = 0
+    result = {}
+    for r in FastaReader(rawread_fa):
+        if read_counter % part_num == 0:
+            if pid != 0:
+                writer.close()
+            pid += 1
+            ma_dir = os.path.join(path, "m_%05d" % pid)
+            if not os.path.isdir(ma_dir):
+                os.mkdir(ma_dir)
+            raw_read_ma_plf = os.path.join(ma_dir, "raw_reads.ma.%d.fasta" % pid)
+            writer = FastaWriter(raw_read_ma_plf)
+            result[pid] = raw_read_ma_plf
+        writer.writeRecord("%08d" % read_counter, r.sequence)
+        writer_all.writeRecord("%08d" % read_counter, r.sequence)
+        read_counter += 1                                                                  
+
+    writer.close()
+    writer_all.close()
+    system("minialign -d %s %s" % (os.path.join(path, "raw_reads.ma.mai"), fa_all))
+
+    return result
+
+def task_ma_consensus_scatter(self):
+    scattered_fn = self.scattered
+    fa_all = self.fa_all
+    db_fn = self.db
+    db_dir = os.path.dirname(db_fn)
+    par = self.parameters
+    config = par['config']
+
+    func = task_run_consensus
+    func_name = '{}.{}'.format(func.__module__, func.__name__)
+
+    # Generate fasta from dazz-db and split it into "ma_split_num" fasta files.
+    p_ids_split_fasta = db_to_splitted_fasta(db_fn, config['ma_split_num'], db_dir)
+
+    tasks = []
+    for p_id, fa_fn in p_ids_split_fasta.iteritems():
+        cns_label = 'cns_%05d' % int(p_id)
+        out_file_fn = '%s.fasta' % cns_label
+        
+        parameters =  {'job_id': p_id,
+                       'config': config,
+                       'sge_option': config['sge_option_ma'],
+        }
+        inputs =  {'fa_block': fa_fn,
+                   'fa_all': os.path.abspath(fa_all),
+        }
+        outputs = {'out_file': out_file_fn,
+        }
+        python_function = func_name,
+        URL = 'task://localhost/%s' %cns_label
+        task_desc = {
+                'inputs': inputs,
+                'outputs': outputs,
+                'parameters': parameters,
+                'python_function': python_function,
+                 'URL': URL,
         }
         tasks.append(task_desc)
     content = json.dumps(tasks, sort_keys=True, indent=4, separators=(',', ': '))
@@ -397,6 +569,12 @@ def task_merge_gather(self):
     # Generate las.fofn in run-dir. # No longer needed!
     #system('find {}/m_*/ -name "preads.*.las" >| {}'.format(pread_dir, las_fofn_fn))
 
+def task_ma_merge_gather(self):
+    fofn_fn = fn(self.ovl_fofn)
+    with open(fofn_fn,  'w') as f:
+        # The keys are p_ids.
+        for filename in sorted(fn(plf) for plf in self.inputs.itervalues()):
+            print >>f, filename
 
 def task_dump_rawread_ids(self):
     rawread_db = fn(self.rawread_db)

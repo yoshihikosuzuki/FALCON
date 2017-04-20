@@ -33,7 +33,7 @@ def create_daligner_tasks(basedir, scatter_fn):
                                       parameters = parameters,
                                       wdir = wdir,
         )
-        daligner_task = make_daligner_task(pype_tasks.task_run_daligner)
+        daligner_task = make_daligner_task(pype_tasks.task_run_aligner)
         tasks.append(daligner_task)
         tasks_out['ajob_%s' % job_uid] = daligner_task.outputs['job_done'] # these are relative, so we need the PypeLocalFiles
     return tasks, tasks_out
@@ -44,23 +44,27 @@ def create_merge_tasks(basedir, scatter_fn):
     content = json.loads(open(scatter_fn).read()) # array of descriptions
     for section in content:
         parameters = section['parameters']
+        aligner = parameters['config']['aligner']
         inputs = section['inputs']
         inputs['scatter_fn'] = scatter_fn
         outputs = section['outputs']
         URL = section['URL']
-        p_id = parameters['job_id']
+        p_id = parameters['job_uid']
         #merge_script = parameters['merge_script']
         #sge_option = parameters['sge_option']
         wdir = os.path.join(basedir, 'm_%05d' %p_id)
+        if aligner == 'minialign':
+            for input_fn, input_fpath in inputs.items():
+                inputs[input_fn] = makePypeLocalFile(input_fpath)
         make_task = PypeTask(inputs = inputs,
                              outputs = outputs,
                              parameters = parameters,
                              wdir = wdir,
         )
-        task = make_task(pype_tasks.task_run_las_merge)
+        task = make_task(pype_tasks.task_run_las_merge if aligner == 'daligner' else pype_tasks.task_run_aligner)
         tasks.append(task)
-        las_fn = task.outputs['merged_las'] # these are relative, so we need the PypeLocalFiles
-        p_ids_merged_las[p_id] = las_fn
+        ovl_file = task.outputs['merged_las' if aligner == 'daligner' else 'ovl_fn'] # these are relative, so we need the PypeLocalFiles
+        p_ids_merged_las[p_id] = ovl_file
     return tasks, p_ids_merged_las
 
 def create_consensus_tasks(basedir, scatter_fn):
@@ -69,6 +73,7 @@ def create_consensus_tasks(basedir, scatter_fn):
     content = json.loads(open(scatter_fn).read()) # array of descriptions
     for section in content:
         parameters = section['parameters']
+        aligner = parameters['config']['aligner']
         inputs = section['inputs']
         inputs['scatter_fn'] = scatter_fn
         outputs = section['outputs']
@@ -76,6 +81,9 @@ def create_consensus_tasks(basedir, scatter_fn):
         p_id = int(parameters['job_id'])
         cns_label = 'cns_%05d' %int(p_id)
         wdir = os.path.join(basedir, 'preads', cns_label)
+        if aligner == 'minialign':
+            for input_fn, input_fpath in inputs.items():
+                inputs[input_fn] = makePypeLocalFile(input_fpath)
         make_c_task = PypeTask(inputs = inputs,
                                outputs = outputs,
                                parameters = parameters,
@@ -97,6 +105,16 @@ def create_merge_gather_task(wd, inputs):
     )
     task = make_task(pype_tasks.task_merge_gather)
     return task, las_fofn_plf, las_fopfn_plf
+
+def create_ma_merge_gather_task(wd, inputs):
+    ovl_fofn_plf = makePypeLocalFile(os.path.join(wd, 'ovl.fofn'))
+
+    make_task = PypeTask(inputs = inputs, # p_ids_merged_las
+                         outputs =  {'ovl_fofn': ovl_fofn_plf,
+                         },
+    )
+    task = make_task(pype_tasks.task_ma_merge_gather)
+    return task, ovl_fofn_plf
 
 def create_consensus_gather_task(wd, inputs):
     # Happens only in stage-0.
@@ -170,7 +188,7 @@ def run(wf, config,
 
     if config['input_type'] == 'raw':
         #### import sequences into daligner DB
-        sleep_done = makePypeLocalFile( os.path.join( rawread_dir, 'sleep_done') )
+        #sleep_done = makePypeLocalFile( os.path.join( rawread_dir, 'sleep_done') )
         rdb_build_done = makePypeLocalFile( os.path.join( rawread_dir, 'rdb_build_done') )
         run_jobs = makePypeLocalFile( os.path.join( rawread_dir, 'run_jobs.sh') )
         parameters = {'work_dir': rawread_dir,
@@ -193,6 +211,7 @@ def run(wf, config,
         wf.addTasks([build_rdb_task])
         wf.refreshTargets([rdb_build_done])
 
+    if config['input_type'] == 'raw' and config['aligner'] == 'daligner':
         raw_reads_nblock = support.get_nblock(fn(raw_reads_db_plf))
         #### run daligner
         wf.max_jobs = config['da_concurrent_jobs']
@@ -306,9 +325,39 @@ def run(wf, config,
 
         wf.refreshTargets(exitOnFailure=exitOnFailure)
 
+    elif config['input_type'] == 'raw' and config['aligner'] == 'minialign':
+        # Produce new FOFN of preads fasta, based on consensus of overlaps.
+        wf.max_jobs = config['ma_concurrent_jobs']
+
+        scattered_plf = os.path.join(rawread_dir, 'minialign-scatter', 'scattered.json')
+        raw_reads_fa_plf = makePypeLocalFile(os.path.join(rawread_dir, '%s.ma.fasta' % 'raw_reads'))
+        make_task = PypeTask(
+                inputs = {
+                    'db': raw_reads_db_plf,
+                },
+                outputs = {
+                    'scattered': scattered_plf,
+                    'fa_all': raw_reads_fa_plf,
+                },
+                parameters = {
+                    'config': config,
+                },
+                wdir = os.path.join(rawread_dir, 'minialign-scatter'),
+        )
+        task = make_task(pype_tasks.task_ma_consensus_scatter)
+        wf.addTask(task)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
+
+        tasks, consensus_out = create_consensus_tasks(rawread_dir, scattered_plf)
+        wf.addTasks(tasks)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
+        
+        task, preads_fofn_plf = create_consensus_gather_task(os.path.join(rawread_dir, 'preads'), consensus_out)
+        wf.addTask(task)
+
 
     if config['target'] == 'pre-assembly':
-        log.info('Quitting after stage-0 for "pre-assembly" target.')
+        fc_run_logger.info('Quitting after stage-0 for "pre-assembly" target.')
         sys.exit(0)
 
     # build pread database
@@ -322,131 +371,177 @@ def run(wf, config,
         wf.addTasks([fofn_abs_task])
         wf.refreshTargets([fofn_abs_task])
 
-    pdb_build_done = makePypeLocalFile( os.path.join( pread_dir, 'pdb_build_done') )
-    parameters = {'work_dir': pread_dir,
-                  'sge_option': config['sge_option_pda'],
-                  'config_fn': input_config_fn,
-                  'config': config}
 
-    run_jobs = makePypeLocalFile(os.path.join(pread_dir, 'run_jobs.sh'))
-    preads_db = makePypeLocalFile(os.path.join(pread_dir, 'preads.db')) # Also .preads.*, of course.
-    make_build_pdb_task  = PypeTask(inputs = {'preads_fofn': preads_fofn_plf },
-                                    outputs = {'pdb_build_done': pdb_build_done,
-                                               'preads_db': preads_db,
-                                               'run_jobs': run_jobs,
-                                    },
-                                    parameters = parameters,
-    )
-    build_pdb_task = make_build_pdb_task(pype_tasks.task_build_pdb)
+    if config['aligner'] == 'daligner':
+        pdb_build_done = makePypeLocalFile( os.path.join( pread_dir, 'pdb_build_done') )
+        parameters = {'work_dir': pread_dir,
+                      'sge_option': config['sge_option_pda'],
+                      'config_fn': input_config_fn,
+                      'config': config}
 
-    wf.addTasks([build_pdb_task])
-    wf.refreshTargets([pdb_build_done])
+        run_jobs = makePypeLocalFile(os.path.join(pread_dir, 'run_jobs.sh'))
+        preads_db = makePypeLocalFile(os.path.join(pread_dir, 'preads.db')) # Also .preads.*, of course.
+        make_build_pdb_task  = PypeTask(inputs = {'preads_fofn': preads_fofn_plf },
+                                        outputs = {'pdb_build_done': pdb_build_done,
+                                                   'preads_db': preads_db,
+                                                   'run_jobs': run_jobs,
+                                        },
+                                        parameters = parameters,
+        )
+        build_pdb_task = make_build_pdb_task(pype_tasks.task_build_pdb)
+
+        wf.addTasks([build_pdb_task])
+        wf.refreshTargets([pdb_build_done])
 
 
-    preads_nblock = support.get_nblock(fn(preads_db))
-    #### run daligner
-    wf.max_jobs = config['pda_concurrent_jobs']
-    config['sge_option_da'] = config['sge_option_pda']
+        preads_nblock = support.get_nblock(fn(preads_db))
+        #### run daligner
+        wf.max_jobs = config['pda_concurrent_jobs']
+        config['sge_option_da'] = config['sge_option_pda']
 
-    scattered_plf = os.path.join(pread_dir, 'daligner-scatter', 'scattered.json')
-    make_daligner_scatter = PypeTask(
-            inputs = {
-                'run_jobs_fn': run_jobs,
-                'db_build_done': pdb_build_done,
-            },
-            outputs = {
-                'scatter_fn': scattered_plf,
-            },
-            parameters = {
-                'db_prefix': 'preads',
+        scattered_plf = os.path.join(pread_dir, 'daligner-scatter', 'scattered.json')
+        make_daligner_scatter = PypeTask(
+                inputs = {
+                    'run_jobs_fn': run_jobs,
+                    'db_build_done': pdb_build_done,
+                },
+                outputs = {
+                    'scatter_fn': scattered_plf,
+                },
+                parameters = {
+                    'db_prefix': 'preads',
+                    'nblock': preads_nblock,
+                    'pread_aln': True,
+                    'config': config,
+                },
+        )
+        task = make_daligner_scatter(pype_tasks.task_daligner_scatter)
+        wf.addTask(task)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
+
+        daligner_tasks, daligner_out = create_daligner_tasks(pread_dir, scattered_plf)
+        wf.addTasks(daligner_tasks)
+
+        p_gathered_las_plf = makePypeLocalFile(os.path.join(pread_dir, 'gathered-las', 'gathered-las.txt'))
+        parameters =  {
                 'nblock': preads_nblock,
-                'pread_aln': True,
-                'config': config,
-            },
-    )
-    task = make_daligner_scatter(pype_tasks.task_daligner_scatter)
-    wf.addTask(task)
-    wf.refreshTargets(exitOnFailure=exitOnFailure)
+        }
+        make_daligner_gather = PypeTask(
+                    inputs = daligner_out,
+                    outputs =  {'gathered': p_gathered_las_plf},
+                    parameters = parameters,
+        )
+        check_p_da_task = make_daligner_gather(pype_tasks.task_daligner_gather)
+        wf.addTask(check_p_da_task)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
 
-    daligner_tasks, daligner_out = create_daligner_tasks(pread_dir, scattered_plf)
-    wf.addTasks(daligner_tasks)
+        # Merge .las files.
+        wf.max_jobs = config['pla_concurrent_jobs']
+        config['sge_option_la'] = config['sge_option_pla']
+        scattered_plf = os.path.join(pread_dir, 'merge-scatter', 'scattered.json')
+        make_task = PypeTask(
+                inputs = {
+                    'run_jobs': run_jobs,
+                    'gathered_las': p_gathered_las_plf,
+                },
+                outputs = {
+                    'scattered': scattered_plf,
+                },
+                parameters = {
+                    'db_prefix': 'preads',
+                    'config': config,
+                },
+        )
+        task = make_task(pype_tasks.task_merge_scatter)
+        wf.addTask(task)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
 
-    p_gathered_las_plf = makePypeLocalFile(os.path.join(pread_dir, 'gathered-las', 'gathered-las.txt'))
-    parameters =  {
-            'nblock': preads_nblock,
-    }
-    make_daligner_gather = PypeTask(
-                inputs = daligner_out,
-                outputs =  {'gathered': p_gathered_las_plf},
-                parameters = parameters,
-    )
-    check_p_da_task = make_daligner_gather(pype_tasks.task_daligner_gather)
-    wf.addTask(check_p_da_task)
-    wf.refreshTargets(exitOnFailure=exitOnFailure)
+        merge_tasks, p_ids_merged_las = create_merge_tasks(pread_dir, scattered_plf)
+        wf.addTasks(merge_tasks)
+        task, las_fofn_plf, las_fopfn_plf = create_merge_gather_task(os.path.join(pread_dir, 'merge-gather'), p_ids_merged_las)
+        wf.addTask(task)
 
-    # Merge .las files.
-    wf.max_jobs = config['pla_concurrent_jobs']
-    config['sge_option_la'] = config['sge_option_pla']
-    scattered_plf = os.path.join(pread_dir, 'merge-scatter', 'scattered.json')
-    make_task = PypeTask(
-            inputs = {
-                'run_jobs': run_jobs,
-                'gathered_las': p_gathered_las_plf,
-            },
-            outputs = {
-                'scattered': scattered_plf,
-            },
-            parameters = {
-                'db_prefix': 'preads',
-                'config': config,
-            },
-    )
-    task = make_task(pype_tasks.task_merge_scatter)
-    wf.addTask(task)
-    wf.refreshTargets(exitOnFailure=exitOnFailure)
-
-    merge_tasks, p_ids_merged_las = create_merge_tasks(pread_dir, scattered_plf)
-    wf.addTasks(merge_tasks)
-    task, las_fofn_plf, las_fopfn_plf = create_merge_gather_task(os.path.join(pread_dir, 'merge-gather'), p_ids_merged_las)
-    wf.addTask(task)
-
-    wf.refreshTargets(exitOnFailure=exitOnFailure)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
 
 
-    # Draft assembly (called 'fc_' for now)
-    wf.max_jobs = config['fc_concurrent_jobs']
-    db2falcon_dir = os.path.join(pread_dir, 'db2falcon')
-    db2falcon_done = makePypeLocalFile(os.path.join(db2falcon_dir, 'db2falcon_done'))
-    preads4falcon_plf = makePypeLocalFile(os.path.join(db2falcon_dir, 'preads4falcon.fasta'))
-    make_run_db2falcon = PypeTask(
-               inputs = {'las_fofn_plf': las_fofn_plf,
-                         'preads_db': preads_db,
-                        },
-               outputs =  {'db2falcon_done': db2falcon_done,
-                           'preads4falcon': preads4falcon_plf,
-                          },
-               parameters = {'wd': db2falcon_dir,
-                             'config': config,
-                             'sge_option': config['sge_option_fc'],
+        # Draft assembly (called 'fc_' for now)
+        wf.max_jobs = config['fc_concurrent_jobs']
+        db2falcon_dir = os.path.join(pread_dir, 'db2falcon')
+        db2falcon_done = makePypeLocalFile(os.path.join(db2falcon_dir, 'db2falcon_done'))
+        preads4falcon_plf = makePypeLocalFile(os.path.join(db2falcon_dir, 'preads4falcon.fasta'))
+        make_run_db2falcon = PypeTask(
+                   inputs = {'las_fofn_plf': las_fofn_plf,
+                             'preads_db': preads_db,
                             },
-    )
-    wf.addTask(make_run_db2falcon(pype_tasks.task_run_db2falcon))
+                   outputs =  {'db2falcon_done': db2falcon_done,
+                               'preads4falcon': preads4falcon_plf,
+                              },
+                   parameters = {'wd': db2falcon_dir,
+                                 'config': config,
+                                 'sge_option': config['sge_option_fc'],
+                                },
+        )
+        wf.addTask(make_run_db2falcon(pype_tasks.task_run_db2falcon))
 
-    falcon_asm_done = makePypeLocalFile( os.path.join(falcon_asm_dir, 'falcon_asm_done'))
-    make_run_falcon_asm = PypeTask(
-               inputs = {'db2falcon_done': db2falcon_done, 'db_file': preads_db,
-                         'preads4falcon': preads4falcon_plf,
-                         'las_fofn': las_fofn_plf,
-                        },
-               outputs =  {'falcon_asm_done': falcon_asm_done},
-               parameters = {'wd': falcon_asm_dir,
-                             'config': config,
-                             'pread_dir': pread_dir,
-                             'sge_option': config['sge_option_fc'],
-               },
-    )
-    wf.addTask(make_run_falcon_asm(pype_tasks.task_run_falcon_asm))
-    wf.refreshTargets()
+        falcon_asm_done = makePypeLocalFile( os.path.join(falcon_asm_dir, 'falcon_asm_done'))
+        make_run_falcon_asm = PypeTask(
+                   inputs = {'db2falcon_done': db2falcon_done, 'db_file': preads_db,
+                             'preads4falcon': preads4falcon_plf,
+                             'las_fofn': las_fofn_plf,
+                            },
+                   outputs =  {'falcon_asm_done': falcon_asm_done},
+                   parameters = {'wd': falcon_asm_dir,
+                                 'config': config,
+                                 'pread_dir': pread_dir,
+                                 'sge_option': config['sge_option_fc'],
+                   },
+        )
+        wf.addTask(make_run_falcon_asm(pype_tasks.task_run_falcon_asm))
+        wf.refreshTargets()
+
+    elif config['aligner'] == 'minialign':
+        preads4falcon_plf = makePypeLocalFile(os.path.join(pread_dir, 'preads4falcon.fasta'))
+        scattered_plf = os.path.join(pread_dir, 'minialign-scatter', 'scattered.json')
+        make_minialign_scatter = PypeTask(
+                inputs = {
+                    'preads_fofn': preads_fofn_plf,
+                },
+                outputs = {
+                    'scatter_fn': scattered_plf,
+                    'preads_fa': preads4falcon_plf,
+                },
+                parameters = {
+                    'config': config,
+                },
+                wdir = os.path.join(pread_dir, 'minialign-scatter')
+        )
+        task = make_minialign_scatter(pype_tasks.task_minialign_scatter)
+        wf.addTask(task)
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
+
+        merge_tasks, p_ids_merged_ovl = create_merge_tasks(pread_dir, scattered_plf)   # write this
+        wf.addTasks(merge_tasks)
+        task, preads_ovl_plf = create_ma_merge_gather_task(os.path.join(pread_dir, 'merge-gather'), p_ids_merged_ovl)
+        wf.addTask(task)
+        #concurrent_jobs = config['ma_concurrent_jobs']   # TODO: if you want to set # concurrent jobs different from that for raw reads, modify here (and the config parser)
+        #wf.max_jobs = concurrent_jobs
+        wf.refreshTargets(exitOnFailure=exitOnFailure)
+
+        # assembly
+        falcon_asm_done = makePypeLocalFile( os.path.join(falcon_asm_dir, 'falcon_asm_done'))
+        make_run_falcon_asm = PypeTask(
+                   inputs = {'preads4falcon': preads4falcon_plf,
+                             'preads_ovl': preads_ovl_plf,
+                            },
+                   outputs =  {'falcon_asm_done': falcon_asm_done},
+                   parameters = {'wd': falcon_asm_dir,
+                                 'config': config,
+                                 'pread_dir': pread_dir,
+                                 'sge_option': config['sge_option_fc'],
+                   },
+        )
+        wf.addTask(make_run_falcon_asm(pype_tasks.task_run_falcon_asm))
+        wf.refreshTargets()
 
     return falcon_asm_done
 

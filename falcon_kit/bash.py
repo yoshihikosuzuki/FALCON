@@ -349,6 +349,31 @@ CUTOFF=%(bash_cutoff)s
 """%(locals())
     return script.format(**params)
 
+def script_run_ma_consensus(config, fa_all, fa_block, out_file_bfn):
+    """config: falcon_sense_option, length_cutoff
+    """
+    params = dict(config)
+    # We calculate length_cutoff again! This is because we do not want
+    # to create yet another task in pbsmrtpipe.
+    length_cutoff = params.get('length_cutoff')
+    params.update(locals())
+    
+    run_consensus = "minialign -NXA -xava -M400 -Ofalcon -l ../../raw_reads.ma.mai {fa_block} | fc_consensus {falcon_sense_option} >| {out_file_bfn}"   # TODO: provide .mai in a proper way
+    # TODO: parameterize -M, change scoring?
+    
+    if config.get('dazcon', False):                                               
+        run_consensus = """
+which dazcon
+dazcon {pa_dazcon_option} -s {db_fn} -a {las_fn} >| {out_file_bfn}
+"""
+        
+    script = """
+set -o pipefail
+CUTOFF=%(length_cutoff)s
+%(run_consensus)s
+"""%(locals())
+    return script.format(**params)
+
 def script_run_falcon_asm(config, las_fofn_fn, preads4falcon_fasta_fn, db_file_fn):
     params = dict(config)
     params.update(locals())
@@ -356,6 +381,33 @@ def script_run_falcon_asm(config, las_fofn_fn, preads4falcon_fasta_fn, db_file_f
 # Given, las.fofn,
 # write preads.ovl:
 time fc_ovlp_filter --db {db_file_fn} --fofn {las_fofn_fn} {overlap_filtering_setting} --min_len {length_cutoff_pr} >| preads.ovl
+
+ln -sf {preads4falcon_fasta_fn} ./preads4falcon.fasta
+
+# Given preads.ovl,
+# write sg_edges_list, c_path, utg_data, ctg_paths.
+time fc_ovlp_to_graph {fc_ovlp_to_graph_option} preads.ovl >| fc_ovlp_to_graph.log
+
+# Given sg_edges_list, utg_data, ctg_paths, preads4falcon.fasta,
+# write p_ctg.fa and a_ctg_all.fa,
+# plus a_ctg_base.fa, p_ctg_tiling_path, a_ctg_tiling_path, a_ctg_base_tiling_path:
+time fc_graph_to_contig
+
+rm -f ./preads4falcon.fasta
+
+# Given a_ctg_all.fa, write a_ctg.fa:
+time fc_dedup_a_tigs
+"""
+    return script.format(**params)
+
+# TODO: merging to original one might be better
+def script_run_ma_falcon_asm(config, preads_ovl_all, preads4falcon_fasta_fn):   # TODO: we should rename preads_ovl_all -> preads_ovl_fofn
+    params = dict(config)
+    params.update(locals())
+    script = """\
+# Given, las.fofn,
+# write preads.ovl:
+time fc_ovlp_filter --ovl {preads_ovl_all} {overlap_filtering_setting} --min_len {length_cutoff_pr} >| preads.ovl
 
 ln -sf {preads4falcon_fasta_fn} ./preads4falcon.fasta
 
