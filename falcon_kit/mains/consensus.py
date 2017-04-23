@@ -89,15 +89,22 @@ def get_alignment(seq1, seq0, edge_tolerance = 1000):
         return 0, 0, 0, 0, 0, 0, "none"
 
 def get_consensus_without_trim( c_input ):
+    print "---"
     seqs, seed_id, config = c_input
+    for seq in seqs:
+        print seq
+    print seed_id
+    print config
     min_cov, K, max_n_read, min_idt, edge_tolerance, trim_size, min_cov_aln, max_cov_aln = config
     if len(seqs) > max_n_read:
         seqs = get_longest_reads(seqs, max_n_read, max_cov_aln, sort=True)
     seqs_ptr = (c_char_p * len(seqs))()
     seqs_ptr[:] = seqs
     consensus_data_ptr = falcon.generate_consensus( seqs_ptr, len(seqs), min_cov, K, min_idt )
+    print "*", consensus_data_ptr
 
     consensus = string_at(consensus_data_ptr[0].sequence)[:]
+    print "**", consensus
     eff_cov = consensus_data_ptr[0].eff_cov[:len(consensus)]
     falcon.free_consensus_data( consensus_data_ptr )
     del seqs_ptr

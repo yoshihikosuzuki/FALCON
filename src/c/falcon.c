@@ -649,6 +649,8 @@ consensus_data * generate_consensus( char ** input_seq,
         free_kmer_match( kmer_match_ptr);
     }
 
+	printf("count = %d\n", aligned_seq_count);
+
     if (aligned_seq_count > 0) {
         consensus = get_cns_from_align_tags( tags_list, aligned_seq_count, strlen(input_seq[0]), min_cov );
     } else {

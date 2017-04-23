@@ -356,9 +356,10 @@ def script_run_ma_consensus(config, fa_all, fa_block, out_file_bfn):
     # We calculate length_cutoff again! This is because we do not want
     # to create yet another task in pbsmrtpipe.
     length_cutoff = params.get('length_cutoff')
+    pa_minialign_option = params.get('pa_minialign_option')
     params.update(locals())
     
-    run_consensus = "minialign -NXA -xava -M400 -Ofalcon -l ../../raw_reads.ma.mai {fa_block} | fc_consensus {falcon_sense_option} >| {out_file_bfn}"   # TODO: provide .mai in a proper way
+    run_consensus = "minialign -NXA -xava -Ofalcon -H$CUTOFF %(pa_minialign_option)s -l ../../raw_reads.ma.mai {fa_block} | fc_consensus {falcon_sense_option} >| {out_file_bfn}"%(locals())   # TODO: provide .mai in a proper way
     # TODO: parameterize -M, change scoring?
     
     if config.get('dazcon', False):                                               

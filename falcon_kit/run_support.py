@@ -222,6 +222,14 @@ def get_dict_from_old_falcon_cfg(config):
     pa_HPCdaligner_option = update_HPCdaligner_option(pa_HPCdaligner_option)
     ovlp_HPCdaligner_option = update_HPCdaligner_option(ovlp_HPCdaligner_option)
 
+    pa_minialign_option = """-M400"""
+    if config.has_option(section, 'pa_minialign_option'):
+        pa_minialign_option = config.get(section, 'pa_minialign_option')
+
+    ovlp_minialign_option = """-a1 -b2 -p2 -q1"""
+    if config.has_option(section, 'ovlp_minialign_option'):
+        ovlp_minialign_option = config.get(section, 'ovlp_minialign_option')
+
     pa_DBsplit_option = """ -x500 -s200"""
     if config.has_option(section, 'pa_DBsplit_option'):
         pa_DBsplit_option = config.get(section, 'pa_DBsplit_option')
@@ -366,6 +374,8 @@ def get_dict_from_old_falcon_cfg(config):
                    "sge_option_ma": config.get(section, 'sge_option_ma'),
                    "pa_HPCdaligner_option": pa_HPCdaligner_option,
                    "ovlp_HPCdaligner_option": ovlp_HPCdaligner_option,
+                   "pa_minialign_option": pa_minialign_option,
+                   "ovlp_minialign_option": ovlp_minialign_option,
                    "pa_DBsplit_option": pa_DBsplit_option,
                    "skip_checks": skip_checks,
                    "dust": dust,

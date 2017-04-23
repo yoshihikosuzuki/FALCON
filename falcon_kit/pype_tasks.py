@@ -332,6 +332,8 @@ def task_minialign_scatter(self):
     preads_fa = self.preads_fa
     par = self.parameters
     config = par['config']
+    ovlp_minialign_option = config['ovlp_minialign_option']
+    length_cutoff_pr = config['length_cutoff_pr']
     tasks = []
 
     basedir = os.path.dirname(preads_fa)
@@ -340,7 +342,7 @@ def task_minialign_scatter(self):
     for job_uid, pread_ma_plf in pids_and_split_preads(preads_fofn, preads_fa, config['ma_split_num'], basedir).iteritems():
         ovl_fn = os.path.join(basedir, "m_%05d" % job_uid, "preads.%s.ovl" % job_uid)
         # TODO: do plf-ize preads.ma.mai
-        script = "minialign -NXA -xava -Oblasr4 -l ../preads.ma.mai %s > %s" % (pread_ma_plf, ovl_fn)   # TODO: suitable parameters for preads?
+        script = "minialign -NXA -xava -Oblasr4 -H%s %s -l ../preads.ma.mai %s > %s" % (length_cutoff_pr, ovlp_minialign_option, pread_ma_plf, ovl_fn)   # TODO: suitable parameters for preads?
         parameters =  {'script': script,
                        'job_uid': job_uid,
                        'config': config,

@@ -10,3 +10,4 @@ falcon_kit.egg-info/
 *.egg
 *.eggs
 falcon_kit/TAGS
+test_minialign/
