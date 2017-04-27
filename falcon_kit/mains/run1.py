@@ -49,7 +49,7 @@ def create_merge_tasks(basedir, scatter_fn):
         inputs['scatter_fn'] = scatter_fn
         outputs = section['outputs']
         URL = section['URL']
-        p_id = parameters['job_id']
+        p_id = parameters['job_uid']
         #merge_script = parameters['merge_script']
         #sge_option = parameters['sge_option']
         wdir = os.path.join(basedir, 'm_%05d' %p_id)
