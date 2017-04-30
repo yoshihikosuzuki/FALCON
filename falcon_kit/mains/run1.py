@@ -26,8 +26,8 @@ def create_daligner_tasks(basedir, scatter_fn):
         inputs['scatter_fn'] = scatter_fn
         outputs = section['outputs']
         URL = section['URL']
-        job_uid = parameters['job_uid']
-        wdir = os.path.join(basedir, 'job_%s' %job_uid)
+        job_id = parameters['job_id']
+        wdir = os.path.join(basedir, 'job_%s' %job_id)
         make_daligner_task = PypeTask(inputs = inputs,
                                       outputs = outputs,
                                       parameters = parameters,
@@ -35,7 +35,7 @@ def create_daligner_tasks(basedir, scatter_fn):
         )
         daligner_task = make_daligner_task(pype_tasks.task_run_aligner)
         tasks.append(daligner_task)
-        tasks_out['ajob_%s' % job_uid] = daligner_task.outputs['job_done'] # these are relative, so we need the PypeLocalFiles
+        tasks_out['ajob_%s' % job_id] = daligner_task.outputs['job_done'] # these are relative, so we need the PypeLocalFiles
     return tasks, tasks_out
 
 def create_merge_tasks(basedir, scatter_fn):
@@ -49,7 +49,7 @@ def create_merge_tasks(basedir, scatter_fn):
         inputs['scatter_fn'] = scatter_fn
         outputs = section['outputs']
         URL = section['URL']
-        p_id = parameters['job_uid']
+        p_id = parameters['job_id']
         #merge_script = parameters['merge_script']
         #sge_option = parameters['sge_option']
         wdir = os.path.join(basedir, 'm_%05d' %p_id)

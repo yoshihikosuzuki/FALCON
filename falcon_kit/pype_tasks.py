@@ -162,10 +162,10 @@ def task_run_aligner(self):
     config = self.parameters['config']
     aligner = config['aligner']
     script = self.parameters['script']
-    job_uid = self.parameters['job_uid']
+    job_id = self.parameters['job_id']
     cwd = self.parameters['cwd']
     script_dir = os.path.join(cwd)
-    script_fn = os.path.join(script_dir , 'rj_%s.sh' % (job_uid))
+    script_fn = os.path.join(script_dir , 'rj_%s.sh' % (job_id))
     args = {
         'script': script,
         'config': config,
@@ -270,17 +270,17 @@ def task_daligner_scatter(self):
     LOG.info('Skip LAcheck after daligner? {}'.format(skip_checks))
     func = task_run_aligner
     func_name = '{}.{}'.format(func.__module__, func.__name__)
-    for job_uid, script in bash.scripts_daligner(run_jobs_fn, db_prefix, db_build_done, nblock, pread_aln, skip_check=skip_checks):
-        job_done_fn = 'job_%s_done' %job_uid
+    for job_id, script in bash.scripts_daligner(run_jobs_fn, db_prefix, db_build_done, nblock, pread_aln, skip_check=skip_checks):
+        job_done_fn = 'job_%s_done' %job_id
         parameters =  {'script': script,
-                       'job_uid': job_uid,
+                       'job_id': job_id,
                        'config': config,
                        'sge_option': config['sge_option_da'],
                        'db_prefix': db_prefix}
         inputs = {'db_build_done': db_build_done}
         outputs = {'job_done': job_done_fn}
         python_function = func_name,
-        URL = 'task://localhost/d_%s_%s' %(job_uid, db_prefix)
+        URL = 'task://localhost/d_%s_%s' %(job_id, db_prefix)
         daligner_task = {
                 'inputs': inputs,
                 'outputs': outputs,
@@ -339,12 +339,12 @@ def task_minialign_scatter(self):
     basedir = os.path.dirname(preads_fa)
     func = task_run_aligner
     func_name = '{}.{}'.format(func.__module__, func.__name__)
-    for job_uid, pread_ma_plf in pids_and_split_preads(preads_fofn, preads_fa, config['ma_split_num'], basedir).iteritems():
-        ovl_fn = os.path.join(basedir, "m_%05d" % job_uid, "preads.%s.ovl" % job_uid)
+    for job_id, pread_ma_plf in pids_and_split_preads(preads_fofn, preads_fa, config['ma_split_num'], basedir).iteritems():
+        ovl_fn = os.path.join(basedir, "m_%05d" % job_id, "preads.%s.ovl" % job_id)
         # TODO: do plf-ize preads.ma.mai
         script = "minialign -NXA -xava -Oblasr4 -H%s %s -l ../preads.ma.mai %s > %s" % (length_cutoff_pr, ovlp_minialign_option, pread_ma_plf, ovl_fn)   # TODO: suitable parameters for preads?
         parameters =  {'script': script,
-                       'job_uid': job_uid,
+                       'job_id': job_id,
                        'config': config,
                        'sge_option': config['sge_option_ma'],
         }
@@ -354,7 +354,7 @@ def task_minialign_scatter(self):
         outputs = {'ovl_fn': ovl_fn,
         }
         python_function = func_name,
-        URL = 'task://localhost/d_%s_%s' %(job_uid, 'pread-ma')
+        URL = 'task://localhost/d_%s_%s' %(job_id, 'pread-ma')
         minialign_task = {
                 'inputs': inputs,
                 'outputs': outputs,
